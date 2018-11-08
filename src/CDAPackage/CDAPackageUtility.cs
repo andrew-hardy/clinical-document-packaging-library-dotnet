@@ -24,9 +24,10 @@ using Nehta.VendorLibrary.CDAPackage.XmlDsig;
 using System.Security.Cryptography.Xml;
 using System.IO;
 using System.Security.Cryptography;
-using Ionic.Zip;
 using System.Text.RegularExpressions;
 using System.Globalization;
+using System.IO.Compression;
+using CDAPackage;
 
 namespace Nehta.VendorLibrary.CDAPackage
 {
@@ -42,7 +43,7 @@ namespace Nehta.VendorLibrary.CDAPackage
     public static class CDAPackageUtility
     {
         #region Public Methods
-        
+
         /// <summary>
         /// Creates a signed CDA package zip file.
         /// </summary>
@@ -56,7 +57,7 @@ namespace Nehta.VendorLibrary.CDAPackage
 
             // Validate CDAPackage
             CDAPackageValidation.ValidateCDAPackage(package, signingCert != null);
-                      
+
             var ms = new MemoryStream();
 
             // Generate signature if package operation is ADD or REPLACE
@@ -71,28 +72,24 @@ namespace Nehta.VendorLibrary.CDAPackage
                 package.CDASignature.FileName = "CDA_SIGN.XML";
             }
 
-            using (var zip = new ZipFile(Encoding.Default))
+            using (var zip = new ZipArchive(ms, ZipArchiveMode.Create))
             {
-                // Add folder entries
-                zip.AddEntry("IHE_XDM/", "");
-                zip.AddEntry("IHE_XDM/SUBSET01/", "");
+                zip.CreateEntry("IHE_XDM/");
+                zip.CreateEntry("IHE_XDM/SUBSET01/");
 
                 zip.AddEntry("IHE_XDM/SUBSET01/" + package.CDADocumentRoot.FileName, package.CDADocumentRoot.FileContent);
 
-                    // Add signature if present
-                    if (signatureContent != null)
-                        zip.AddEntry("IHE_XDM/SUBSET01/" + package.CDASignature.FileName, signatureContent);
+                // Add signature if present
+                if (signatureContent != null)
+                    zip.AddEntry("IHE_XDM/SUBSET01/" + package.CDASignature.FileName, signatureContent);
 
-                    if (package.CDADocumentAttachments != null)
+                if (package.CDADocumentAttachments != null)
+                {
+                    foreach (var file in package.CDADocumentAttachments)
                     {
-                        foreach (var file in package.CDADocumentAttachments)
-                        {
-                            zip.AddEntry("IHE_XDM/SUBSET01/" + file.FileName, file.FileContent);
-                        }
+                        zip.AddEntry("IHE_XDM/SUBSET01/" + file.FileName, file.FileContent);
                     }
-
-                // Save output file
-                zip.Save(ms);
+                }
             }
 
             var zipContent = ms.ToArray();
@@ -188,7 +185,7 @@ namespace Nehta.VendorLibrary.CDAPackage
 
             // Get zip entries in zip package
             var inputStream = new MemoryStream(package);
-            Dictionary<string, byte[]> entries = GetZipEntriesFromZipStream(ZipFile.Read(inputStream));
+            Dictionary<string, byte[]> entries = GetZipEntriesFromZipStream(new ZipArchive(inputStream));
 
             // Check to ensure that there is only one submission set folder
             string submissionPath = null;
@@ -409,22 +406,23 @@ namespace Nehta.VendorLibrary.CDAPackage
         /// </summary>
         /// <param name="zipFile">The zip file.</param>
         /// <returns>Zip file entries and their content.</returns>
-        internal static Dictionary<string, byte[]> GetZipEntriesFromZipStream(ZipFile zipFile)
+        internal static Dictionary<string, byte[]> GetZipEntriesFromZipStream(ZipArchive zipFile)
         {
             var contentByFileName = new Dictionary<string, byte[]>();
 
             if (zipFile != null)
             {
                 // Iterate through all entries and add their filename and contents.
-                foreach (ZipEntry entry in zipFile.Entries)
+                foreach (var entry in zipFile.Entries)
                 {
                     var readStream = new MemoryStream();
-
+                    
                     // Ony process files.
-                    if (!entry.IsDirectory)
+                    if (entry.Length > 0)
                     {
-                        entry.Extract(readStream);
-                        contentByFileName.Add(entry.FileName, readStream.ToArray());
+                        using (var s = entry.Open())
+                            s.CopyTo(readStream);
+                        contentByFileName.Add(entry.FullName, readStream.ToArray());
                     }
                 }
 
